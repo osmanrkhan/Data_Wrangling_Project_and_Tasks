@@ -1,0 +1,193 @@
+---
+title: "okhan_HW3_QBS181"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r setup, include=FALSE}
+options(tinytex.verbose = TRUE)
+## knitr::opts_chunk$set(echo = TRUE)
+
+library(sqldf)
+library(nycflights13)
+library(Rfacebook)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
+
+```
+
+#### Question 1
+
+  
+  I attempted this question so using both Table 2, and using both Table 4a and 4b. In the case of Table 2, I simply pivoted wider,
+```{r include = TRUE, warning=FALSE}
+table2_pivoted <- table2 %>%
+  group_by(country, year) %>%
+  pivot_wider(names_from = type, values_from = count)
+
+table2_pivoted$rate <- (10000 * table2_pivoted$cases) /
+  table2_pivoted$population
+
+
+rate_table4 <- as_tibble(cbind(table4a$country, 10000 * table4a$`1999` / table4b$`1999`, 
+                     10000 * table4a$`2000` / table4b$`2000`))
+colnames(rate_table4) = names(table4a)
+```
+Table 2, the pivoted version I created that I thought most succinctly summed up the per-country-year findings is as follows:
+
+```{r}
+table2_pivoted
+```
+
+  
+Furthermore, the rate table I created by simply column-wise dividing table4a by table 4b and multiplying each entry by 10,000 is below:
+
+```{r}
+rate_table4
+```
+\newpage
+#### Question 2
+
+Why does this code fail: table4a%>%gather(1999,2000,key="year",value="cases")?
+
+Well, one reason is that the key as specificied by the paramater key = "year" does not exist in that table: there is no column called "year", nor is there a column called cases. So the function can't work. R is not psychic, it requires valid column names in order to work properly and they are not provided here. 
+
+\newpage
+#### Question 3
+
+After importing the flight data, I used the lubridate package to crunch the integers provided into usable dates and times. The lubridate package's dates function robustly with ggplot, so it was better for graphing purposes.
+```{r warning=FALSE }
+#3.	Use the flights dataset in the nycflights13 library and answer the following
+#a.	How does the distribution of flights times within a day
+#change over the course of the year
+
+dat <- flights
+dates_dat <- mdy(paste(as.character(dat$month), "/", 
+                       as.character(dat$day), "/", as.character(dat$year)))
+
+#converts time into lubridate-readable format.
+time_parser <- function(to_convert =dat$dep_delay) {
+  test <- as.character(to_convert)
+  #add as many 0s as needed to the front
+  test = gsub(" ", "", paste(str_dup("0", 4 -nchar(test)),test))
+  # lubridatify(HH:MM format)
+  test = hm(paste(str_sub(test, 1,2), ":", str_sub(test, 3,4)))
+  return(test)
+}
+
+
+
+#format(mean(strptime(time_convertr(dat$sched_dep_time), "%H:%M"), na.rm = TRUE), "%H:%M")
+
+
+dat$dates <- dates_dat
+dat$dep_times_converted <- time_parser(dat$sched_dep_time)
+dat$arr_times_converted <- time_parser(dat$sched_arr_time)
+dat$real_deps <- time_parser(dat$dep_time)
+dat$new_air <- time_parser(dat$air_time)
+
+
+dat %>%
+  group_by(dates) %>%
+  arrange(desc(as.numeric(new_air))) %>%
+  summarize(median_air = as.numeric(new_air[length(new_air)/2])) %>%
+  ggplot() + geom_smooth(aes(x = dates, y = median_air), span = 0.2) + geom_point(aes(x = dates, y = median_air), alpha = 0.2, color = "red") + xlab("Dates") + ylab("Numeric Approx. of Airtimes") + ggtitle("Median Airtime over 2013")
+
+## plot median scheduled departure time per day
+dat %>%
+  group_by(dates) %>%
+  arrange(desc(as.numeric(dep_times_converted))) %>%
+  summarize(median_depart = as.numeric(dep_times_converted[length(dep_times_converted)/2])) %>%
+  ggplot() + geom_smooth(aes(x = dates, y = median_depart), span = 0.2) + geom_point(aes(x = dates, y = median_depart), alpha = 0.2, color = "red") + xlab("Dates") + ylab("Numeric Approx. of Schedule Departure Times") + ggtitle("Median Sched. Dep. Time over 2013")
+
+## plot median scheduled arrival time per day
+
+dat %>%
+  group_by(dates) %>%
+  arrange(desc(as.numeric(arr_times_converted))) %>%
+  summarize(median_arr = as.numeric(arr_times_converted[length(arr_times_converted)/2])) %>%
+  ggplot() + geom_smooth(aes(x = dates, y = median_arr), span = 0.2) + geom_point(aes(x = dates, y = median_arr), alpha = 0.2, color = "red") + xlab("Dates") + ylab("Numeric Approx. of Arrival Times") + ggtitle("Median Arrival Time over 2013")
+
+
+## plot median actual departure time per day
+dat %>%
+  group_by(dates) %>%
+  arrange(desc(as.numeric(real_deps))) %>%
+  summarize(median_dep = as.numeric(real_deps[length(real_deps)/2])) %>%
+  ggplot() + geom_smooth(aes(x = dates, y = median_dep), span = 0.2) + geom_point(aes(x = dates, y = median_dep), alpha = 0.2, color = "red") + xlab("Dates") + ylab("Numeric Approx. of Dep. Times") + ggtitle("Median Real Departure Time over 2013")
+
+```
+
+As the tables above show, apart from airtime, there was little clear change in the arrival or departure times over the year. Interestingly, airtime spikes massively towards the start/end of the year, possibly due to holiday season and people flying long distances home and back.
+\newpage
+#### Question 3b
+```{r warning = FALSE}
+#b.	Compare dep_time,sched_dep_time, and dep_delay. Are they 
+# consistent. Explain your findings
+
+dp <- time_parser(dat$dep_time)
+
+schdp <- time_parser(dat$sched_dep_time)
+del1 <- time_parser(dat$dep_delay)
+ratio_correct <- sum(dp - schdp == del1, na.rm = TRUE) / length(dat$dep_time)
+
+```
+By using the time parser explained above, I used a simple boolean to evaluate if Departure Time - Scheduled Departure Time equaled Departure Delay.
+
+I found this to be the case in `r round(ratio_correct * 100)`% of the time. So, roughly, yes. The delays did match up with what was expected
+
+#### Question 3c
+
+Since the question as I understood it is interested in flights that were supposed to leave at round numbers 6:00PM or 5:30 PM but instead left at 5:59PM or 5:22PM, I will only set my delay binary variable to 1 if the delay is negative and therefore early. Then I will examine all flights that departed, in reality (as opposed to schedule), between minute 20 and 30 as well as 50 and 60. If a significant number of those are delayed compared to the general population of flights, we can confirm the hypothesis.
+```{r}
+dat$del_binary <- dat$dep_delay
+
+dat$del_binary[which(dat$dep_delay < 0)] = 1
+dat$del_binary[which(dat$dep_delay >= 0)] = 0
+
+in_betweens <- rep(NA, length(dat$real_deps))
+
+in_betweens[which((minute(dat$real_deps) > 20 & minute(dat$real_deps) < 30) | 
+                    (minute(dat$real_deps) > 50))] <- 1
+
+in_betweens[which((minute(dat$real_deps) >= 0 & minute(dat$real_deps) <= 20) | 
+                    (minute(dat$real_deps) >= 30 & minute(dat$real_deps) <= 50 ))] <- 0
+
+#sum(dat$del_binary == 1 & in_betweens == 1, na.rm = TRUE) / length(which(in_betweens == 1))
+
+#sum(dat$del_binary == 1, na.rm = TRUE) / length(dat$del_binary)
+
+
+
+
+```
+I created a dummy variable to represent all flight departure times that were between 20 and 30 or between 50 and 60 called in_betweens. I created another to show negative delay. By cross-referencing, I found that within  the 'in_betweens' population, the probability of having been delayed was `r sum(dat$del_binary == 1 & in_betweens == 1, na.rm = TRUE) * 100 / length(which(in_betweens == 1))`%, which is higher than the general flight population's chance of being delayed, which was `r sum(dat$del_binary == 1, na.rm = TRUE) * 100 / length(dat$del_binary)`%.
+
+So, I will confirm the hypothesis. Yes, the flights that take off between the 20th and 30th or between the 50th and 60th minute are more likely to have been delayed.
+
+#### Question 4
+```{r}
+#4.	Use similar methods as accessing Twitter from an API, search the keyword “black Friday deals” on Facebook.
+
+
+fb_key = "EAAL13aH5SDABABFGZCjhn1l8bCbFznF98XbVhP3hqnllklmMVvWJ0DbFeGDf9gxstHZC9cHkCQwsP4AJjjFdZCIv2lHbmugWkyNZAcX3oWv1QdWQg3qENm30AZCDKM8N1Ip0NMJy2rPQYqaPBX83zQpeSQHEFu6TUzbggKPlZArHmNWmeZBw0Jp6zfRN7DgRo3phSU72RZBOWaziqiRDrKnLBiSzigmbV4sFZCQbYiRcKywZDZD"
+
+
+ # fb_oauth <- fbOAuth(app_id = "833282207467568",
+ #         app_secret = "698cb630b6797e1cc1f8115274a95864",
+ #         extended_permissions = FALSE,
+ #         legacy_permissions = FALSE, scope = NULL)
+ # save(fb_oauth, file="fb_oauth")
+ # load(file = "fb_oauth")
+
+# searchPages("black Friday deals", token =fb_oauth, n=100)
+```
+
+Unfortunately I was unable to perform a Facebook search using the R API as the searchFacebook function has been deprecated. Even though i received full clearance and an authorization code, looking through the documentation did not show any similar functions, only ones that could target specific pages or users.
+
+I tried to use the searchPages function instead, but it repeatedly threw an error and returned no pages.
+
+I am not sure if this is due to my being in Pakistan or some other reason. However, my authorization token and key were authorized and valid. It was only the final step that my program failed
