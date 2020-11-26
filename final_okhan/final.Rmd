@@ -1,0 +1,227 @@
+---
+title: "Khan Final - QBS181"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+### Question 1
+##### Part A) and Part B)
+```{r echo = FALSE, include = FALSE}
+library(sqldf)
+library("RODBC")
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+```
+
+```{r}
+### QUESTION 1
+
+
+dat <- read.csv("//Mac/Home/Desktop/IC_BP_v2.csv")
+#a.Convert BP alerts to BP status
+
+#b.	Define Hypo-1 & Normal as Controlled blood pressure; 
+# Hypo-2, HTN1, HTN2 & HTN3 as Uncontrolled blood pressure: 
+#Controlled & Uncontrolled blood pressure as 1 or 0 (Dichotomous Outcomes) 
+
+BPStatus_temp <- dat$BPAlerts
+BPStatus_temp[which(dat$BPAlerts %in% c("Normal", "Hypo1"))] <- 1
+BPStatus_temp[which(dat$BPAlerts %in% c("Hypo2", "HTN1", "HTN2", "HTN3"))] <- 0
+dat$BPAlerts <- as.numeric(BPStatus_temp)
+names(dat)[4] <- "BPStatus"
+head(dat$BPStatus)
+```
+Using the in pipe operator and R's in-built which function, I was able to classify the different Blood Pressure Alerts as 1's and 0's.
+\newpage
+
+
+##### Part C)
+
+For part C, I merged the tables with an instance of R's inner join function on both tables' respective ID variables.
+```{r}
+#c.	Merge this table with demographics (SQL table) to obtain their enrollment dates
+
+myconn <- odbcConnect("dartmouth_qbs181","okhan","okhan@qbs181")
+Demo <- sqlQuery(myconn,"select * from Demographics")
+
+joined_dat <- inner_join(Demo, dat, by = c("contactid" = "ID"))
+
+```
+
+\newpage
+
+##### Part D)
+
+For part D, I created the interval using the following steps.
+
+1. I used the base R as.Date function and lubridate's week function to extract the week numbers from each ObservedTime entry. I used an origin of 1899-12-30 as this is the common standard for Excel dates, and the dates seemed to conform to this. However, it doesn't matter what the exact absolute origin is, only the relative intervals between the dates mater for our purposes, so if the origin is incorrect, it is fairly inconsequential.
+
+2. I then used the new weeks variable, which was an integer produced from the ObservedTime dates to establish 12-week intervals, at 12, 24, 36, and so on. The 5 intervals went from 0 to 48 to infinity, as the total range of weeks was 1-52, so we did not need a sixth interval
+
+3. For later usage, I added a column of interval numbers for each entry.
+```{r}
+total_wks <- week(as.Date(joined_dat$ObservedTime, origin = "1899-12-30"))
+
+
+#whichth 12-week interval is this entry in? That's what interval_num will show.
+interval_num <- total_wks
+
+interval_num[which(total_wks < 12)] = 1
+interval_num[which(total_wks < 24 & total_wks >= 12)] = 2
+interval_num[which(total_wks < 36 & total_wks >= 24)] = 3
+interval_num[which(total_wks < 48 & total_wks >= 36)] = 4
+interval_num[which(total_wks >= 48)] = 5
+
+joined_dat$interval <- interval_num
+joined_dat$weeks <- total_wks
+```
+\newpage
+
+##### Part E)
+
+For part E, I needed to establish A) a baseline score and B) a score per entry per interval.
+
+For my baseline score, I computed the minimum week per ID per interval, then I extracted the average BPStatus score for that week, for that interval, for that ID. I then also extracted the average BPStatus score for that interval and that ID.
+
+So if a patient Joe came in for 12 weeks, I now had the average BPStatus score from his first week as well as his average score across all 12 weeks.
+
+
+```{r}
+dat_first_week_num_added <- joined_dat %>%
+  group_by(contactid, interval) %>%
+  mutate(first_week = min(weeks)) %>%
+  ungroup()
+
+
+dat_avg_of_intervals_added <- dat_first_week_num_added %>%
+  group_by(contactid, interval) %>%
+  mutate(avg_interval = mean(BPStatus, na.rm = TRUE)) %>%
+  ungroup()
+
+
+dat_first_week_avg_added <- dat_avg_of_intervals_added %>%
+  group_by(contactid, interval) %>%
+  ## if it is the first week, then use the score
+  mutate(first_week_score = mean(BPStatus[weeks == first_week], na.rm = TRUE)) %>%
+  ungroup()
+  
+
+#mean(dat_first_week_avg_added$first_week_score < dat_first_week_avg_added$avg_interval, na.rm = TRUE) 
+
+
+final_result <- dat_first_week_avg_added %>%
+  select(contactid, BPStatus, avg_interval, first_week_score) %>%
+  mutate(unimproved = avg_interval >= first_week_score, improved = (avg_interval < first_week_score),
+         score_change = avg_interval - first_week_score) %>%
+  summarize(mean_unimproved = mean(unimproved, na.rm = TRUE), mean_improved = mean(improved, na.rm = TRUE),
+            mean_change = mean(score_change, na.rm = TRUE))
+
+```
+I was then able to compare how often a patient who came in for any interval saw a decrease in score from the first week average to the 12 week average. 
+
+My findings were simple, that across the entire dataset, most patients saw only a marginal change in BP score of `r final_result$mean_change`, as well as only `r round(final_result$mean_improved, 2) * 100`% seeing a change in their average BPScore, with `r round(final_result$mean_unimproved, 2) * 100`% of patients seeing their conditions stay the same or worsen.
+
+When we go into specific intervals, we have the same basic finding. In fact, some intervals actually saw much higher rates of unimproved patients. Those results are below.
+
+```{r}
+dat_first_week_avg_added %>%
+  select(contactid, BPStatus, avg_interval, first_week_score, interval) %>%
+  group_by(interval) %>%
+  mutate(unimproved = avg_interval >= first_week_score, improved = avg_interval < first_week_score, score_change = avg_interval - first_week_score) %>%
+  summarize('% Unimproved' = 100 * mean(unimproved, na.rm = TRUE), '% Improved' = 100 * mean(improved, na.rm = TRUE), 'Average BPStatus Change' = mean(score_change, na.rm = TRUE))
+```
+\newpage
+
+##### Part F)
+
+For Part F, I used much the same approach as E. I used the same principles to generate the final week average BPStatus score for a specific patient in a specific interval, and then compared them. The findings are in the table below:
+
+```{r warning=FALSE}
+dat_last_week_num_added <- joined_dat %>%
+  group_by(contactid, interval) %>%
+  mutate(first_week = max(weeks)) %>%
+  ungroup()
+
+dat_last_week_avg_added <- dat_last_week_num_added %>%
+  group_by(contactid, interval) %>%
+  ## if it is the first week, then use the score
+  mutate(last_week_score = mean(BPStatus[weeks == first_week], na.rm = TRUE)) %>%
+  ungroup()
+
+#get the first week average BP's calculated above
+dat_last_week_avg_added$first_week_score <- dat_first_week_avg_added$first_week_score
+
+dat_last_week_avg_added %>%
+  select(contactid, BPStatus, last_week_score, first_week_score) %>%
+  mutate(unimproved = last_week_score <= first_week_score, improved = last_week_score > first_week_score, score_change = last_week_score - first_week_score) %>%
+  summarize('% Unimproved' = 100 * mean(unimproved, na.rm = TRUE), '% Improved' = 100 * mean(improved, na.rm = TRUE), 'Average Score Change' = mean(score_change, na.rm = TRUE))
+
+ 
+```
+In short, most of the patients did not meaningfully improve over an interval from their first week in that interval to their last week in that interval.
+
+I considered using a simple binary evaluation: did the patient go from 1 to 0 or 0 to 1 when comapring the first entry in week 1 to the last entry in week 12, but I decided it did not help much, so I used averages instead.
+\newpage
+
+### Question 2
+
+##### SQL 
+For SQL I used the inner join command in conjunction with CAST TextSentDate as datetime to find the latest text. As can be seen below, the only duplicate entries are when both the System and the Clinician have sent a Text, and I decided this was acceptable. Pruning this would have been a simple matter of applying the WHERE function (SELECT * FROM merged_sql WHERE SenderName == 'Clinician' for example), but I did not see it as necessary.
+```{r}
+# Group by id, choose min date after converting to dates somehow. Then only select those that are equl to min date using a filter
+Demo <- sqlQuery(myconn,"select * from Demographics")
+Cond <- sqlQuery(myconn,"select * from Conditions")
+Text <- sqlQuery(myconn,"select * from Text")
+
+merged_sql <- sqldf("SELECT * FROM Demo INNER JOIN Cond ON Demo.contactid = Cond.tri_patientid;")
+
+merged_sql <- sqldf("SELECT * FROM merged_sql INNER JOIN Text ON merged_sql.contactid = Text.tri_contactid")
+
+merged_sql1 <- sqldf("SELECT * FROM merged_sql 
+                    GROUP BY contactid
+                    HAVING (CAST(TextSentDate AS datetime) == CAST(TEXTSENTDATE AS datetime))
+                    ORDER BY contactid")
+
+head(merged_sql1 %>%
+  arrange(contactid))
+```
+
+
+##### R
+The R Version is below, using slice and which.max to only generate one row per entry.
+
+```{r}
+
+merged_R <- inner_join(Demo, Cond, by = c("contactid" = "tri_patientid")) %>% 
+  inner_join(., Text, by = c("contactid" = "tri_contactId"))
+
+
+merged_R1 <- merged_R %>%
+  group_by(contactid) %>%
+  slice(which.max(TextSentDate))
+
+head(merged_R1)
+```
+
+These results are validated by the table outputs below:
+```{r}
+n_occur <- data.frame(table(merged_sql1$contactid))
+
+n_occur[n_occur$Freq >1,]
+
+n_occur <- data.frame(table(merged_R1$contactid))
+
+n_occur[n_occur$Freq >1,]
+
+```
+
+
+All projects of this term can be found below:
+https://github.com/osmanrkhan/Data_Wrangling_Project_and_Tasks
+
+
+
+
+
