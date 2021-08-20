@@ -3,6 +3,8 @@ library(dplyr)
 library(tidyverse)
 library(lubridate)
 
+#Actually maybe don't do this???
+
 myconn<-odbcConnect("dartmouth_qbs181","okhan","okhan@qbs181")
 IC_Demo<-sqlQuery(myconn,"select * from Demographics")
 
